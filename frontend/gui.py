@@ -9,6 +9,7 @@ import requests
 import threading
 import time
 from datetime import timedelta
+import math
 
 # Настройки внешнего вида
 ctk.set_appearance_mode("dark")
@@ -27,12 +28,21 @@ class BioreactorGUI(ctk.CTk):
         # Флаг для остановки обновления
         self.running = True
         
+        # Переменные для анимации
+        self.stirrer_angle = 0
+        self.pump_a_pulse = 0
+        self.pump_b_pulse = 0
+        self.animation_running = False
+        
         # Создание основного интерфейса
         self.create_widgets()
         
         # Запуск потока для периодического обновления данных
         self.update_thread = threading.Thread(target=self.periodic_update, daemon=True)
         self.update_thread.start()
+        
+        # Запуск анимации
+        self.start_animation()
         
         # Обработка закрытия окна
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -73,8 +83,15 @@ class BioreactorGUI(ctk.CTk):
         self.main_frame = ctk.CTkFrame(self)
         self.main_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
+        # Центральная панель - визуализация биореактора
+        self.center_frame = ctk.CTkFrame(self.main_frame, width=350)
+        self.center_frame.pack(side="left", fill="y", padx=(0, 10))
+        self.center_frame.pack_propagate(False)
+        
+        self.create_reactor_visualization()
+        
         # Левая колонка - параметры в реальном времени
-        self.left_frame = ctk.CTkFrame(self.main_frame, width=400)
+        self.left_frame = ctk.CTkFrame(self.main_frame, width=350)
         self.left_frame.pack(side="left", fill="y", padx=(0, 10))
         self.left_frame.pack_propagate(False)
         
@@ -91,6 +108,316 @@ class BioreactorGUI(ctk.CTk):
         self.bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
         
         self.create_action_buttons()
+    
+    def create_reactor_visualization(self):
+        """Создание визуализации биореактора с анимацией"""
+        title = ctk.CTkLabel(
+            self.center_frame,
+            text="🧪 БИОРЕАКТОР",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title.pack(pady=10)
+        
+        # Канвас для рисования биореактора
+        self.reactor_canvas = ctk.CTkCanvas(
+            self.center_frame,
+            width=300,
+            height=400,
+            bg="#1a1a2e",
+            highlightthickness=0
+        )
+        self.reactor_canvas.pack(padx=10, pady=10)
+        
+        # Рисуем корпус реактора
+        self.draw_reactor_body()
+        
+        # Рисуем мешалку
+        self.draw_stirrer()
+        
+        # Рисуем насосы
+        self.draw_pumps()
+        
+        # Индикатор статуса
+        self.status_indicator = self.reactor_canvas.create_oval(
+            20, 20, 40, 40,
+            fill="#e74c3c",
+            outline="#c0392b",
+            width=2
+        )
+        
+        self.status_text = self.reactor_canvas.create_text(
+            50, 30,
+            text="STOP",
+            fill="white",
+            font=("Arial", 8, "bold"),
+            anchor="w"
+        )
+    
+    def draw_reactor_body(self):
+        """Рисует корпус биореактора"""
+        # Основной сосуд
+        self.reactor_body = self.reactor_canvas.create_polygon(
+            80, 80, 220, 80,  # верх
+            240, 120,  # правый верхний угол
+            240, 320,  # правый низ
+            220, 360,  # правый нижний угол
+            80, 360,   # левый нижний угол
+            60, 320,   # левый низ
+            60, 120,   # левый верхний угол
+            fill="#2c3e50",
+            outline="#3498db",
+            width=3
+        )
+        
+        # Жидкость внутри (будет обновляться)
+        self.liquid_level = self.reactor_canvas.create_polygon(
+            70, 280, 230, 280,
+            230, 350, 70, 350,
+            fill="#3498db",
+            stipple="gray50",
+            tags="liquid"
+        )
+        
+        # Датчики
+        self.temp_sensor = self.reactor_canvas.create_oval(
+            140, 100, 160, 120,
+            fill="#e74c3c",
+            outline="#c0392b"
+        )
+        
+        self.ph_sensor = self.reactor_canvas.create_oval(
+            100, 200, 120, 220,
+            fill="#9b59b6",
+            outline="#8e44ad"
+        )
+        
+        self.o2_sensor = self.reactor_canvas.create_oval(
+            180, 200, 200, 220,
+            fill="#2ecc71",
+            outline="#27ae60"
+        )
+    
+    def draw_stirrer(self):
+        """Рисует мешалку"""
+        # Вал мешалки
+        self.stirrer_shaft = self.reactor_canvas.create_line(
+            150, 60, 150, 300,
+            fill="#95a5a6",
+            width=4
+        )
+        
+        # Лопасти мешалки (группа объектов для вращения)
+        self.stirrer_blades = []
+        # Верхняя лопасть
+        blade1 = self.reactor_canvas.create_line(
+            150, 280, 150, 260, 180, 270,
+            fill="#7f8c8d",
+            width=3
+        )
+        blade2 = self.reactor_canvas.create_line(
+            150, 280, 150, 260, 120, 270,
+            fill="#7f8c8d",
+            width=3
+        )
+        # Нижняя лопасть
+        blade3 = self.reactor_canvas.create_line(
+            150, 310, 150, 290, 170, 300,
+            fill="#7f8c8d",
+            width=3
+        )
+        blade4 = self.reactor_canvas.create_line(
+            150, 310, 150, 290, 130, 300,
+            fill="#7f8c8d",
+            width=3
+        )
+        self.stirrer_blades = [blade1, blade2, blade3, blade4]
+        
+        # Мотор мешалки
+        self.stirrer_motor = self.reactor_canvas.create_rectangle(
+            130, 40, 170, 65,
+            fill="#34495e",
+            outline="#2c3e50"
+        )
+    
+    def draw_pumps(self):
+        """Рисует насосы"""
+        # Насос A (слева)
+        self.pump_a_body = self.reactor_canvas.create_rectangle(
+            10, 150, 50, 190,
+            fill="#e67e22",
+            outline="#d35400",
+            width=2
+        )
+        self.pump_a_label = self.reactor_canvas.create_text(
+            30, 170,
+            text="A",
+            fill="white",
+            font=("Arial", 12, "bold")
+        )
+        self.pump_a_indicator = self.reactor_canvas.create_oval(
+            20, 155, 40, 175,
+            fill="#e74c3c",
+            outline="#c0392b"
+        )
+        
+        # Трубка от насоса A
+        self.pump_a_tube = self.reactor_canvas.create_line(
+            50, 170, 70, 170, 70, 200,
+            fill="#e67e22",
+            width=3,
+            dash=(5, 5)
+        )
+        
+        # Насос B (справа)
+        self.pump_b_body = self.reactor_canvas.create_rectangle(
+            250, 150, 290, 190,
+            fill="#27ae60",
+            outline="#229954",
+            width=2
+        )
+        self.pump_b_label = self.reactor_canvas.create_text(
+            270, 170,
+            text="B",
+            fill="white",
+            font=("Arial", 12, "bold")
+        )
+        self.pump_b_indicator = self.reactor_canvas.create_oval(
+            260, 155, 280, 175,
+            fill="#e74c3c",
+            outline="#c0392b"
+        )
+        
+        # Трубка от насоса B
+        self.pump_b_tube = self.reactor_canvas.create_line(
+            250, 170, 230, 170, 230, 200,
+            fill="#27ae60",
+            width=3,
+            dash=(5, 5)
+        )
+    
+    def start_animation(self):
+        """Запускает анимацию"""
+        self.animation_running = True
+        self.animate()
+    
+    def stop_animation(self):
+        """Останавливает анимацию"""
+        self.animation_running = False
+    
+    def animate(self):
+        """Основная функция анимации"""
+        if not self.animation_running:
+            return
+        
+        try:
+            # Получаем текущий статус и параметры
+            status = getattr(self, 'current_status', 'stopped')
+            stirrer_speed = getattr(self, 'current_stirrer_speed', 0)
+            pump_a_rate = getattr(self, 'current_pump_a_rate', 0)
+            pump_b_rate = getattr(self, 'current_pump_b_rate', 0)
+            
+            # Анимация мешалки
+            if status in ['running', 'paused'] and stirrer_speed > 0:
+                self.stirrer_angle += stirrer_speed / 50  # Скорость вращения зависит от скорости мешалки
+                if self.stirrer_angle >= 360:
+                    self.stirrer_angle -= 360
+                self.update_stirrer_animation()
+            
+            # Анимация насосов
+            if status == 'running':
+                # Насос A
+                if pump_a_rate > 0:
+                    self.pump_a_pulse += pump_a_rate / 10
+                    self.update_pump_animation('a', self.pump_a_pulse)
+                
+                # Насос B
+                if pump_b_rate > 0:
+                    self.pump_b_pulse += pump_b_rate / 10
+                    self.update_pump_animation('b', self.pump_b_pulse)
+            
+            # Обновление индикатора статуса
+            self.update_status_indicator(status)
+            
+        except Exception as e:
+            print(f"Ошибка анимации: {e}")
+        
+        # Следующий кадр через 50 мс (20 FPS)
+        self.after(50, self.animate)
+    
+    def update_stirrer_animation(self):
+        """Обновляет анимацию мешалки"""
+        angle_rad = math.radians(self.stirrer_angle)
+        
+        # Вращение лопастей - верхняя пара (индексы 0 и 1)
+        for i in [0, 1]:
+            blade_id = self.stirrer_blades[i]
+            phase = i * math.pi
+            
+            base_x, base_y = 150, 280
+            offset = 30
+            
+            new_x1 = base_x
+            new_y1 = base_y - 20
+            new_x2 = base_x + int(offset * math.sin(angle_rad + phase))
+            new_y2 = base_y
+            new_x3 = base_x - int(offset * math.sin(angle_rad + phase))
+            
+            self.reactor_canvas.coords(blade_id, new_x1, new_y1, new_x2, new_y2, new_x3, new_y2)
+        
+        # Вращение лопастей - нижняя пара (индексы 2 и 3)
+        for i in [2, 3]:
+            blade_id = self.stirrer_blades[i]
+            phase = (i - 2) * math.pi
+            
+            base_x, base_y = 150, 310
+            offset = 20
+            
+            new_x1 = base_x
+            new_y1 = base_y - 20
+            new_x2 = base_x + int(offset * math.sin(angle_rad + phase))
+            new_y2 = base_y
+            new_x3 = base_x - int(offset * math.sin(angle_rad + phase))
+            
+            self.reactor_canvas.coords(blade_id, new_x1, new_y1, new_x2, new_y2, new_x3, new_y2)
+    
+    def update_pump_animation(self, pump, pulse):
+        """Обновляет анимацию насоса"""
+        # Пульсация индикатора
+        pulse_value = abs(math.sin(pulse))
+        
+        if pump == 'a':
+            # Цвет индикатора меняется от красного к ярко-красному
+            intensity = int(100 + 155 * pulse_value)
+            color = f"#{intensity:02x}00{intensity:02x}"
+            self.reactor_canvas.itemconfig(self.pump_a_indicator, fill=color)
+            
+            # Анимация трубки
+            dash_offset = int(pulse * 10) % 10
+            self.reactor_canvas.itemconfig(self.pump_a_tube, dash=(5, dash_offset))
+        else:
+            # Цвет индикатора меняется от красного к ярко-зеленому
+            intensity = int(100 + 155 * pulse_value)
+            color = f"#00{intensity:02x}00"
+            self.reactor_canvas.itemconfig(self.pump_b_indicator, fill=color)
+            
+            # Анимация трубки
+            dash_offset = int(pulse * 10) % 10
+            self.reactor_canvas.itemconfig(self.pump_b_tube, dash=(5, dash_offset))
+    
+    def update_status_indicator(self, status):
+        """Обновляет индикатор статуса"""
+        if status == 'running':
+            color = "#2ecc71"
+            text = "RUN"
+        elif status == 'paused':
+            color = "#f39c12"
+            text = "PAUSE"
+        else:
+            color = "#e74c3c"
+            text = "STOP"
+        
+        self.reactor_canvas.itemconfig(self.status_indicator, fill=color)
+        self.reactor_canvas.itemconfig(self.status_text, text=text)
     
     def create_monitoring_panel(self):
         """Панель мониторинга параметров"""
@@ -606,6 +933,12 @@ class BioreactorGUI(ctk.CTk):
     def update_monitoring_values(self, data):
         """Обновление значений на панели мониторинга"""
         try:
+            # Сохраняем текущие параметры для анимации
+            self.current_status = data.get('status', 'stopped')
+            self.current_stirrer_speed = data.get('stirrer_speed', 0)
+            self.current_pump_a_rate = data.get('pump_a_rate', 0)
+            self.current_pump_b_rate = data.get('pump_b_rate', 0)
+            
             # Температура
             if hasattr(self, 'temperature_value'):
                 self.temperature_value.configure(text=f"{data.get('temperature', 0):.1f} °C")
@@ -682,6 +1015,7 @@ class BioreactorGUI(ctk.CTk):
     def on_closing(self):
         """Обработка закрытия окна"""
         self.running = False
+        self.animation_running = False
         self.destroy()
 
 
